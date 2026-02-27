@@ -162,6 +162,30 @@ This means:
 
 The trailing `--workspace` was already present before the fix — the only change is the `continue` guard that skips `--precise` when it would fail.
 
+## E2E Tests (Renovate updateArtifacts)
+
+The `e2e/` directory contains end-to-end tests that directly invoke Renovate's
+cargo `updateArtifacts()` function against fixture Cargo projects. This verifies
+that the `cargoUpdatePrecise` fix works by exercising the actual Renovate code
+that generates and executes `cargo update` commands.
+
+The test script (`e2e/test_update_artifacts.ts`) uses `tsx` to import the
+`updateArtifacts` function from the Renovate source, sets up `GlobalConfig`,
+and calls it with the same parameters Renovate would pass during a real update.
+
+The Renovate fork is included as a git submodule. To initialize it:
+
+    git submodule update --init
+
+To run the e2e tests alone:
+
+    docker build -t cargo-update-e2e-tests -f e2e/Dockerfile.e2e .
+    docker run --rm cargo-update-e2e-tests
+
+Or run everything (unit tests + e2e):
+
+    ./run_all_tests.sh
+
 ## Directory Structure
 
 ```

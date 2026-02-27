@@ -1,0 +1,43 @@
+# Stage 1: Install renovate dependencies (no build needed — tsx runs source directly)
+FROM node:24-slim AS renovate-deps
+RUN corepack enable
+WORKDIR /renovate
+COPY renovate/ .
+RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm run generate
+
+# Stage 2: Runtime (Rust + Node.js)
+FROM rust:1.90-slim
+
+# Install Node.js and git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git jq && \
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install tsx globally for running TypeScript directly
+RUN npm install -g tsx
+
+# Copy renovate with installed dependencies (no build step needed)
+COPY --from=renovate-deps /renovate /opt/renovate
+
+# Copy e2e test files
+WORKDIR /tests
+COPY e2e/ ./e2e/
+
+# Generate Cargo.lock for each fixture
+RUN cd /tests/e2e/fixtures/range-bump-single && \
+    cargo update --config net.git-fetch-with-cli=true 2>/dev/null && \
+    cargo update --config net.git-fetch-with-cli=true --package hashbrown --precise 0.14.5 2>/dev/null
+
+RUN cd /tests/e2e/fixtures/range-bump-workspace && \
+    cargo update --config net.git-fetch-with-cli=true 2>/dev/null && \
+    cargo update --config net.git-fetch-with-cli=true --package hashbrown --precise 0.14.5 2>/dev/null
+
+RUN cd /tests/e2e/fixtures/stale-lockver-workspace && \
+    cargo update --config net.git-fetch-with-cli=true 2>/dev/null && \
+    cargo update --config net.git-fetch-with-cli=true --package reqwest --precise 0.12.23 2>/dev/null
+
+RUN chmod +x /tests/e2e/run_e2e_tests.sh
+CMD ["./e2e/run_e2e_tests.sh"]

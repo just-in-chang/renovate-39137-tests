@@ -4,3 +4,9 @@ target/
 *.swp
 *.swo
 *~
+renovate/.git
+renovate/node_modules
+renovate/coverage
+renovate/.cache
+renovate/dist
+renovate/tmp

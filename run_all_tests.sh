@@ -18,3 +18,9 @@ docker run --rm "$IMAGE" ./run_tests.sh 2
 echo ""
 echo "=== Scenario 3: Multi-version ambiguity (syn) ==="
 docker run --rm "$IMAGE" ./run_tests.sh 3
+
+echo ""
+echo "=== E2E Tests (Renovate CLI integration) ==="
+E2E_IMAGE="cargo-update-e2e-tests"
+docker build -t "$E2E_IMAGE" -f e2e/Dockerfile.e2e .
+docker run --rm "$E2E_IMAGE"
