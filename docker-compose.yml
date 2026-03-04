@@ -1,0 +1,83 @@
+services:
+  gitea:
+    image: gitea/gitea:1.25.4
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: "http://gitea:3000"
+      GITEA__server__DISABLE_SSH: "true"
+      GITEA__server__OFFLINE_MODE: "true"
+      GITEA__server__LFS_START_SERVER: "false"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "false"
+      GITEA__service__DEFAULT_ALLOW_CREATE_ORGANIZATION: "false"
+      GITEA__log__MODE: console
+      GITEA__log__LEVEL: Warn
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/api/v1/version"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  cargo-tests:
+    build: 39137/
+
+  e2e-38778-old:
+    build:
+      context: e2e_38778/
+      args:
+        RENOVATE_REPO: https://github.com/renovatebot/renovate.git
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      GITEA_HOST: gitea
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      GITEA_ADMIN_USER: renovate-bot
+      GITEA_ADMIN_PASS: password123
+      REPO_PREFIX: old
+
+  e2e-38778-new:
+    build:
+      context: e2e_38778/
+      args:
+        RENOVATE_REPO: https://github.com/just-in-chang/renovate.git
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      GITEA_HOST: gitea
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      GITEA_ADMIN_USER: renovate-bot
+      GITEA_ADMIN_PASS: password123
+      REPO_PREFIX: new
+
+  e2e-39137-old:
+    build:
+      context: e2e_39137/
+      args:
+        RENOVATE_REPO: https://github.com/renovatebot/renovate.git
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      GITEA_HOST: gitea
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      GITEA_ADMIN_USER: renovate-bot
+      GITEA_ADMIN_PASS: password123
+      REPO_PREFIX: old
+
+  e2e-39137-new:
+    build:
+      context: e2e_39137/
+      args:
+        RENOVATE_REPO: https://github.com/just-in-chang/renovate.git
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      GITEA_HOST: gitea
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      GITEA_ADMIN_USER: renovate-bot
+      GITEA_ADMIN_PASS: password123
+      REPO_PREFIX: new

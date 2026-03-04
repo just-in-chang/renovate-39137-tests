@@ -1,28 +1,15 @@
 #!/usr/bin/env bash
-# run_tests.sh — Test suite for cargo update behavior relevant to
-# renovatebot/renovate#39137
+# test.sh — Cargo update test suite for renovatebot/renovate#39137
 #
-# Tests three scenarios across single-crate and workspace layouts:
-#   1. Range bump (hashbrown "0.14" → "0.15")
-#   2. Stale lockedVersion (sequential --precise with reqwest)
-#   3. Multi-version ambiguity (syn@1 + syn@2)
-#
-# Usage:
-#   ./run_tests.sh <1|2|3>
-#   CARGO="rustup run 1.80.0 cargo" ./run_tests.sh 1
+# Runs bug reproduction first, then scenarios 1-3.
+# Each scenario tests both single-crate and workspace layouts.
 set -euo pipefail
 
-if [[ $# -ne 1 ]] || ! [[ "$1" =~ ^[123]$ ]]; then
-    echo "Usage: $0 <1|2|3>"
-    echo "  1 — Range bump (hashbrown)"
-    echo "  2 — Stale lockedVersion (reqwest)"
-    echo "  3 — Multi-version ambiguity (syn)"
-    exit 1
-fi
-
-SCENARIO="$1"
 CARGO="${CARGO:-cargo}"
+export CARGO_NET_RETRY=10
+export CARGO_HTTP_TIMEOUT=120
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPRO_DIR="$SCRIPT_DIR/repro_crate"
 SINGLE_DIR="$SCRIPT_DIR/single_crate"
 WORKSPACE_DIR="$SCRIPT_DIR/workspace"
 
@@ -138,6 +125,77 @@ print_summary() {
 
 echo -e "${BOLD}cargo update test suite for renovatebot/renovate#39137${RESET}"
 echo -e "Using: $($CARGO --version)"
+echo ""
+
+# ════════════════════════════════════════════════════════════════════════════
+# BUG REPRODUCTION
+# ════════════════════════════════════════════════════════════════════════════
+
+echo -e "${BOLD}=== Reproducing renovatebot/renovate#39137 ===${RESET}"
+echo ""
+
+cd "$REPRO_DIR"
+
+echo -e "${YELLOW}[setup]${RESET} Using committed lockfile with reqwest@0.12.23"
+echo ""
+echo -e "${BOLD}Running the 3 commands from the issue:${RESET}"
+echo ""
+
+# Command 1: --precise from subdir manifest (should succeed)
+echo -e "${YELLOW}[cmd 1]${RESET} cargo update --manifest-path subdir/Cargo.toml --package reqwest@0.12.23 --precise 0.12.24"
+if $CARGO update --config net.git-fetch-with-cli=true \
+    --manifest-path subdir/Cargo.toml --package reqwest@0.12.23 --precise 0.12.24 2>&1; then
+    echo -e "  ${GREEN}PASS${RESET} — command 1 succeeded (as expected)"
+else
+    echo -e "  ${RED}UNEXPECTED${RESET} — command 1 failed"
+fi
+echo ""
+
+# Command 2: --workspace from subdir manifest (should succeed)
+echo -e "${YELLOW}[cmd 2]${RESET} cargo update --manifest-path subdir/Cargo.toml --workspace"
+if $CARGO update --config net.git-fetch-with-cli=true \
+    --manifest-path subdir/Cargo.toml --workspace 2>&1; then
+    echo -e "  ${GREEN}PASS${RESET} — command 2 succeeded (as expected)"
+else
+    echo -e "  ${RED}UNEXPECTED${RESET} — command 2 failed"
+fi
+echo ""
+
+# Command 3: --precise from subdir2 manifest (should FAIL — this is the bug)
+echo -e "${YELLOW}[cmd 3]${RESET} cargo update --manifest-path subdir2/Cargo.toml --package reqwest@0.12.23 --precise 0.12.24"
+OUTPUT=$($CARGO update --config net.git-fetch-with-cli=true \
+    --manifest-path subdir2/Cargo.toml --package reqwest@0.12.23 --precise 0.12.24 2>&1) && CMD3_EXIT=0 || CMD3_EXIT=$?
+
+if [[ $CMD3_EXIT -ne 0 ]]; then
+    echo "$OUTPUT"
+    if echo "$OUTPUT" | grep -q "did not match"; then
+        echo ""
+        echo -e "  ${GREEN}PASS${RESET} — command 3 failed with 'did not match' (this is the bug from #39137)"
+    else
+        echo ""
+        echo -e "  ${RED}UNEXPECTED${RESET} — command 3 failed but with unexpected error"
+    fi
+else
+    echo "$OUTPUT"
+    echo ""
+    echo -e "  ${RED}UNEXPECTED${RESET} — command 3 succeeded (bug may be fixed in this cargo version)"
+fi
+
+echo ""
+echo -e "${BOLD}=== Explanation ===${RESET}"
+echo "Command 1 updated reqwest from 0.12.23 → 0.12.24 in the lockfile."
+echo "Command 2 ran --workspace (no-op since the range is already satisfied)."
+echo "Command 3 tried --package reqwest@0.12.23 but the lockfile now has 0.12.24,"
+echo "so the @0.12.23 spec doesn't match anything → error."
+echo ""
+echo "This is exactly the bug that renovate's cargoUpdatePrecise fix addresses:"
+echo "when the manifest range is bumped, skip --precise and use --workspace instead."
+
+# Reset repro_crate lockfile for repeatable runs
+cd "$REPRO_DIR"
+git checkout -- Cargo.lock 2>/dev/null || true
+
+cd "$SCRIPT_DIR"
 echo ""
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -461,12 +519,10 @@ echo ""
 
 }
 
-# ── Dispatch ────────────────────────────────────────────────────────────────
+# ── Run all scenarios ─────────────────────────────────────────────────────
 
-case "$SCENARIO" in
-    1) scenario_1 ;;
-    2) scenario_2 ;;
-    3) scenario_3 ;;
-esac
+scenario_1
+scenario_2
+scenario_3
 
 print_summary

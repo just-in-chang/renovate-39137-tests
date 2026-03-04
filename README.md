@@ -1,207 +1,236 @@
 # Cargo Update Test Suite for renovatebot/renovate#39137
 
-Reproducible test suite for `cargo update` behavior that exposed a bug in renovate's `cargoUpdatePrecise` logic. Each scenario runs in a fresh Docker container to avoid state leakage between tests.
+Reproducible test suite for `cargo update` behavior that exposed a bug in Renovate's `cargoUpdatePrecise` logic. Uses Docker Compose to orchestrate a shared Gitea instance and run all tests.
 
-## Background
-
-### The bug
-
-Renovate's `cargoUpdatePrecise` function (in `lib/modules/manager/cargo/artifacts.ts`) updates lockfile-pinned crate versions by running a sequence of commands:
-
-```
-cargo update --manifest-path <path> --package <dep>@<lockedVersion> --precise <newVersion>
-```
-
-In a **workspace** with multiple members that share a dependency (e.g. `reqwest = "0.12"`), this sequence breaks:
-
-1. **Command 1** (from `subdir/Cargo.toml`): `cargo update --package reqwest@0.12.23 --precise 0.12.24` — succeeds, updates the shared `Cargo.lock` from `0.12.23` → `0.12.24`.
-2. **Command 2** (from `subdir2/Cargo.toml`): `cargo update --package reqwest@0.12.23 --precise 0.12.24` — **fails** because the lockfile now has `0.12.24`, so the `@0.12.23` spec no longer matches anything. Cargo reports: `"package ID specification did not match"`.
-
-The root cause is that workspaces share a single `Cargo.lock`, so the first `--precise` call mutates it and subsequent calls reference a stale `lockedVersion`.
-
-### The fix
-
-The fix adds a guard in `cargoUpdatePrecise` (lines 54-59 of `artifacts.ts`):
-
-```typescript
-// If the range is bumped in Cargo.toml, the old lockedVersion may no longer
-// exist in Cargo's dependency graph, so let the --workspace update at the
-// end re-resolve it instead.
-if (dep.currentValue && dep.newValue && dep.currentValue !== dep.newValue) {
-  continue;
-}
-```
-
-When `currentValue !== newValue` (i.e. the manifest range was bumped, like `"0.14"` → `"0.15"`), the function skips `--precise` for that dependency. A final `cargo update --workspace` command then re-resolves all dependencies against the new ranges.
-
-This works because `--workspace` doesn't reference specific locked versions — it just resolves the entire dependency graph from the manifest ranges, avoiding the stale-spec problem.
-
-## Quick Start (Docker)
+## Quick Start
 
 ```bash
 ./run_all_tests.sh
 ```
 
-This builds the Docker image (pinned to `rust:1.90-slim`), then runs the bug reproduction and all three scenarios in **separate containers** — each `docker run` starts fresh so there's no state leakage between scenarios. No local Rust installation required.
+This uses Docker Compose to:
+1. Start a Gitea instance (with healthcheck)
+2. Create an admin user and API token
+3. Build all test images
+4. Run 5 tests sequentially with clear pass/fail expectations
+5. Print a summary table
 
-### Run a single scenario
+No local Rust, Node.js, or Gitea installation required — only Docker with Compose.
 
-```bash
-docker build -t cargo-update-tests .
+## What the Tests Do
 
-# Bug reproduction only
-docker run --rm cargo-update-tests ./repro_bug.sh
+| # | Test | Expects | Why |
+|---|------|---------|-----|
+| 1 | `cargo-tests` (39137/) | PASS | Cargo-level behavior verification, no Renovate |
+| 2 | `e2e-38778-old` (upstream) | FAIL | Bug #38778 exists in upstream Renovate |
+| 3 | `e2e-38778-new` (fork) | PASS | Fix for #38778 applied |
+| 4 | `e2e-39137-old` (upstream) | FAIL | Bug #39137 exists in upstream Renovate |
+| 5 | `e2e-39137-new` (fork) | PASS | Fix for #39137 applied |
 
-# Individual scenarios
-docker run --rm cargo-update-tests ./run_tests.sh 1   # Range bump
-docker run --rm cargo-update-tests ./run_tests.sh 2   # Stale lockedVersion
-docker run --rm cargo-update-tests ./run_tests.sh 3   # Multi-version ambiguity
+"Old" tests build Renovate from `renovatebot/renovate` (upstream).
+"New" tests build from `just-in-chang/renovate` (fork with fix).
+
+## Test Output
+
+```
+════════════════════════════════════════════════════════
+  TEST 1/5: #39137: Cargo Update Tests
+  EXPECT: PASS (cargo behavior verification)
+════════════════════════════════════════════════════════
+
+cargo update test suite for renovatebot/renovate#39137
+Using: cargo 1.90.0
+
+=== Reproducing renovatebot/renovate#39137 ===
+[cmd 1] cargo update --package reqwest@0.12.23 --precise 0.12.24
+  PASS — command 1 succeeded (as expected)
+[cmd 2] cargo update --workspace
+  PASS — command 2 succeeded (as expected)
+[cmd 3] cargo update --package reqwest@0.12.23 --precise 0.12.24
+  PASS — command 3 failed with 'did not match' (this is the bug from #39137)
+
+━━━ Scenario 1: Range bump (single crate) ━━━
+  PASS 1a: --precise 0.15.2 after range bump 0.14→0.15
+  PASS 1b: --workspace after range bump 0.14→0.15
+
+━━━ Scenario 1: Range bump (workspace) ━━━
+  PASS 1a-ws: --precise 0.15.2 after range bump 0.14→0.15
+  PASS 1b-ws: --workspace after range bump 0.14→0.15
+
+━━━ Scenario 2: Stale lockedVersion (single crate) ━━━
+  PASS 2a: --precise 0.12.24 (first call)
+  PASS 2b: --precise 0.12.24 again (stale @0.12.23 spec) (failed with expected error)
+
+━━━ Scenario 2: Stale lockedVersion (workspace) ━━━
+  PASS 2a-ws: --precise 0.12.24 from subdir1
+  PASS 2b-ws: --precise 0.12.24 from subdir2 (stale @0.12.23 spec) (failed with expected error)
+
+━━━ Scenario 3: Multi-version ambiguity (single crate) ━━━
+  PASS 3a: --workspace with syn@1 + syn@2
+  PASS 3b: --package syn --precise (ambiguous, two syn versions) (failed with expected error)
+  PASS 3c: --package syn@2.0.100 --precise 2.0.90 (disambiguated)
+  PASS 3d: --workspace after syn range bump to >=2.0.110
+
+━━━ Scenario 3: Multi-version ambiguity (workspace) ━━━
+  PASS 3a-ws: --workspace with syn@1 + syn@2
+  PASS 3b-ws: --package syn --precise (ambiguous, two syn versions) (failed with expected error)
+  PASS 3c-ws: --package syn@2.0.100 --precise 2.0.90 (disambiguated)
+  PASS 3d-ws: --workspace after syn range bump to >=2.0.110
+
+  Passed: 16  Failed: 0
+
+  RESULT: PASS (as expected)
+
+════════════════════════════════════════════════════════
+  TEST 2/5: e2e #38778 — Old Renovate (upstream)
+  EXPECT: FAIL (bug #38778 exists in upstream — reqwest workspace range bump broken)
+════════════════════════════════════════════════════════
+
+━━━ Workspace: reqwest 0.12 (bump strategy) ━━━
+Running Renovate...
+  FAIL — found 'package ID specification did not match any packages' error
+
+  RESULT: FAIL (as expected — bug confirmed)
+
+════════════════════════════════════════════════════════
+  TEST 3/5: e2e #38778 — New Renovate (fork)
+  EXPECT: PASS (fix for #38778 applied — reqwest workspace range bump works)
+════════════════════════════════════════════════════════
+
+━━━ Workspace: reqwest 0.12 (bump strategy) ━━━
+Running Renovate...
+  PASS — no artifact errors (lockfile may already be up to date)
+
+  RESULT: PASS (as expected)
+
+════════════════════════════════════════════════════════
+  TEST 4/5: e2e #39137 — Old Renovate (upstream)
+  EXPECT: FAIL (bug #39137 exists in upstream — cargoUpdatePrecise broken)
+════════════════════════════════════════════════════════
+
+━━━ Range bump (single) ━━━
+  PASS Range bump (single) — no artifact errors
+
+━━━ Range bump (workspace) ━━━
+  FAIL Range bump (workspace) — found 'package ID specification did not match any packages' error
+
+━━━ Stale lockedVersion (workspace) ━━━
+  FAIL Stale lockedVersion (workspace) — found 'package ID specification did not match any packages' error
+
+  RESULT: FAIL (as expected — bug confirmed)
+
+════════════════════════════════════════════════════════
+  TEST 5/5: e2e #39137 — New Renovate (fork)
+  EXPECT: PASS (fix for #39137 applied — cargoUpdatePrecise works)
+════════════════════════════════════════════════════════
+
+━━━ Range bump (single) ━━━
+  PASS Range bump (single) — no artifact errors
+
+━━━ Range bump (workspace) ━━━
+  PASS Range bump (workspace) — no artifact errors
+
+━━━ Stale lockedVersion (workspace) ━━━
+  PASS Stale lockedVersion (workspace) — no artifact errors
+
+  RESULT: PASS (as expected)
+
+════════════════════════════════════════════════════════
+  FINAL RESULTS
+════════════════════════════════════════════════════════
+  PASS  #39137 cargo tests
+  PASS  e2e #38778 old (upstream)  (failed as expected)
+  PASS  e2e #38778 new (fork)
+  PASS  e2e #39137 old (upstream)  (failed as expected)
+  PASS  e2e #39137 new (fork)
+════════════════════════════════════════════════════════
+  Passed: 5  Failed: 0
+════════════════════════════════════════════════════════
 ```
 
-## Prerequisites (running locally)
+## Test Philosophy
 
-- Rust toolchain via [rustup](https://rustup.rs/)
-- `cargo` available in PATH (tested with Rust 1.90; behavior may differ on older toolchains)
+### Why Docker?
 
-## Running Locally
+Renovate's cargo artifact pipeline depends on exact interactions between specific tool versions — Rust/cargo, Node.js, pnpm, and a Git hosting platform. Running these tests on a bare host would mean:
 
-```bash
-# Reproduce the exact bug from #39137
-./repro_bug.sh
+- Installing Rust, Node.js, and pnpm at specific versions
+- Running a Gitea instance (or mocking one)
+- Hoping the host environment doesn't interfere with results
+- Making it impossible for someone else to reproduce
 
-# Run individual scenarios
-./run_tests.sh 1   # Range bump (hashbrown)
-./run_tests.sh 2   # Stale lockedVersion (reqwest)
-./run_tests.sh 3   # Multi-version ambiguity (syn)
-```
+Docker eliminates all of that. Each test image pins its toolchain (e.g. `rust:1.90-slim`, `node:24-slim`), Gitea runs as a container with a healthcheck, and the entire suite is a single `./run_all_tests.sh` on any machine with Docker.
 
-## Using a Specific Toolchain
+### Why Gitea?
 
-```bash
-CARGO="rustup run 1.80.0 cargo" ./run_tests.sh 1
-CARGO="rustup run nightly cargo" ./run_tests.sh 3
-```
+Renovate's e2e behavior depends on a real Git platform — it clones repos, creates branches, opens PRs, and posts artifact error comments. Mocking all of that would test the mock, not Renovate. Gitea is lightweight, starts in seconds, and supports the full Gitea platform API that Renovate uses. Docker Compose manages Gitea's lifecycle (start, healthcheck, teardown) so the tests don't need to.
 
-## What Each Scenario Tests
+### Test structure: prove the bug, then prove the fix
 
-Every scenario is tested against both a **single-crate** layout (`single_crate/`) and a **workspace** layout (`workspace/` with `subdir1` + `subdir2`). Each scenario writes its Cargo.toml, runs `cargo update` to resolve deps into the lockfile, then pins specific versions with `cargo update --precise` as needed.
+Each e2e test pair follows the same pattern:
 
-### Scenario 1: Range Bump (`hashbrown "0.14"` → `"0.15"`)
+1. **Old (upstream)**: Build Renovate from `renovatebot/renovate`. Push a fixture repo to Gitea. Run Renovate. **Expect failure** — the bug should produce an artifact error (`package ID specification did not match any packages`).
+2. **New (fork)**: Same fixture, same Gitea, but Renovate is built from the fork with the fix applied. **Expect success** — no artifact errors.
 
-Tests what happens when the `Cargo.toml` dependency range is bumped to a new semver-incompatible range. For 0.x crates, `^0.14` and `^0.15` are incompatible ranges (cargo treats the first non-zero component as the major version), so the locked version `0.14.5` is outside the new `"0.15"` range.
+This structure makes it impossible to accidentally "pass" — if the old test stops failing, something changed upstream (the bug was fixed, or the test no longer triggers it). If the new test starts failing, the fix regressed.
 
-**Setup:** Write `hashbrown = "0.14"` and `cargo update` to resolve (locks `0.14.x`), then overwrite `Cargo.toml` to `hashbrown = "0.15"`.
+The cargo-level tests (test 1) complement the e2e tests by demonstrating the underlying `cargo update` behavior directly, without Renovate in the loop.
 
-| Test | Command | Expected | Why |
-|------|---------|----------|-----|
-| **1a** | `--package hashbrown@0.14.x --precise 0.15.2` | Success | Modern cargo can resolve across the range bump |
-| **1b** | `--workspace` | Success | Re-resolves to latest `0.15.x` — **this is what our fix uses** |
+### Fixture design
 
-Both single-crate (**1a**, **1b**) and workspace (**1a-ws**, **1b-ws**) variants are tested.
+Each fixture is a minimal Cargo project (or workspace) committed with a `Cargo.lock` that locks dependencies to specific older versions. This guarantees Renovate will find an update to propose, triggering the artifact update pipeline where the bug lives.
 
-### Scenario 2: Stale lockedVersion (Sequential `--precise`)
-
-Directly reproduces the #39137 bug: two workspace members share a dependency (`reqwest = "0.12"`), and the second `--precise` call fails because the lockfile was already mutated by the first.
-
-**Setup:** Write `reqwest = "0.12"` and `cargo update` to resolve, then pin to `0.12.23` via `cargo update --precise`.
-
-| Test | Command | Expected | Why |
-|------|---------|----------|-----|
-| **2a** | `--package reqwest@0.12.23 --precise 0.12.24` | Success | First call, lockfile still has `0.12.23` |
-| **2b** | `--package reqwest@0.12.23 --precise 0.12.24` (again) | Failure: `"did not match"` | Lockfile now has `0.12.24`, so `@0.12.23` is stale |
-
-In the workspace variant (**2a-ws**, **2b-ws**), the first call is from `subdir1` and the second from `subdir2`, matching the exact sequence from the bug report.
-
-### Scenario 3: Multi-Version Ambiguity (`syn@1` + `syn@2`)
-
-Tests behavior when multiple major versions of the same crate coexist. For the single-crate layout, `syn = "2"` is a direct dependency and `syn@1` comes in transitively via `clap = "3"` (which uses `clap_derive` → `syn@1`). For the workspace layout, `subdir1` depends on `syn = "1"` and `subdir2` on `syn = "2"`.
-
-**Setup:** Write `syn = "2"` + `clap = "3"` (or `syn = "1"` / `syn = "2"` in workspace) and `cargo update` to resolve both syn versions, then pin `syn@2` to `2.0.100`.
-
-| Test | Command | Expected | Why |
-|------|---------|----------|-----|
-| **3a** | `--workspace` | Success | `--workspace` handles multi-version deps correctly |
-| **3b** | `--package syn --precise 2.0.100` | Failure: `"ambiguous"` | Bare `syn` matches both `syn@1.x` and `syn@2.x` |
-| **3c** | `--package syn@2.0.100 --precise 2.0.90` | Success | `@version` disambiguates which syn to target |
-| **3d** | `--workspace` after bumping range to `">=2.0.110, <3"` | Success | Correctly re-resolves only the matching version |
-
-Both single-crate and workspace variants are tested.
-
-## How `repro_bug.sh` Works
-
-This is a standalone reproduction of the exact bug from the issue. It uses the `repro_crate/` workspace (two members, both depending on `reqwest = "0.12"`) with a committed `Cargo.lock` already pinned to `reqwest@0.12.23`. It then runs the 3 commands from the issue:
-
-1. **Command 1:** `cargo update --manifest-path subdir/Cargo.toml --package reqwest@0.12.23 --precise 0.12.24` — succeeds, updates lockfile from `0.12.23` → `0.12.24`
-2. **Command 2:** `cargo update --manifest-path subdir/Cargo.toml --workspace` — succeeds (no-op)
-3. **Command 3:** `cargo update --manifest-path subdir2/Cargo.toml --package reqwest@0.12.23 --precise 0.12.24` — **fails** with `"did not match"` because the lockfile already has `0.12.24`
-
-## Relationship to Renovate Code Change
-
-The code change lives in `lib/modules/manager/cargo/artifacts.ts`. The `cargoUpdatePrecise` function builds a list of `cargo update --precise` commands for each dependency, then appends a final `--workspace` call. The fix inserts a `continue` guard at the top of the loop:
-
-```typescript
-for (const dep of updatedDeps) {
-  // Skip --precise when the range was bumped — the old lockedVersion
-  // may not exist in the lockfile anymore
-  if (dep.currentValue && dep.newValue && dep.currentValue !== dep.newValue) {
-    continue;
-  }
-
-  cmds.push(
-    `cargo update ... --package ${dep.packageName}@${dep.lockedVersion} --precise ${dep.newVersion}`
-  );
-}
-
-// Final --workspace resolves any skipped deps against their new ranges
-cmds.push(`cargo update ... --workspace`);
-```
-
-This means:
-- **Range unchanged** (`currentValue === newValue`): still uses `--precise` with the exact `@lockedVersion` spec (existing behavior)
-- **Range bumped** (`currentValue !== newValue`): skips `--precise`, lets the trailing `--workspace` re-resolve against the new range (the fix)
-
-The trailing `--workspace` was already present before the fix — the only change is the `continue` guard that skips `--precise` when it would fail.
-
-## E2E Tests (Renovate updateArtifacts)
-
-The `e2e/` directory contains end-to-end tests that directly invoke Renovate's
-cargo `updateArtifacts()` function against fixture Cargo projects. This verifies
-that the `cargoUpdatePrecise` fix works by exercising the actual Renovate code
-that generates and executes `cargo update` commands.
-
-The test script (`e2e/test_update_artifacts.ts`) uses `tsx` to import the
-`updateArtifacts` function from the Renovate source, sets up `GlobalConfig`,
-and calls it with the same parameters Renovate would pass during a real update.
-
-The Renovate fork is included as a git submodule. To initialize it:
-
-    git submodule update --init
-
-To run the e2e tests alone:
-
-    docker build -t cargo-update-e2e-tests -f e2e/Dockerfile.e2e .
-    docker run --rm cargo-update-e2e-tests
-
-Or run everything (unit tests + e2e):
-
-    ./run_all_tests.sh
+Workspace fixtures include per-member `Cargo.lock` files. This is what causes Renovate to run `cargo update --precise` separately for each member rather than once at the workspace root — which is the exact code path that triggers the collision bug.
 
 ## Directory Structure
 
 ```
-repro_crate/       — Static workspace matching the exact #39137 setup
-  Cargo.toml       — Workspace root with members: [subdir, subdir2]
-  Cargo.lock       — Committed lockfile with reqwest pinned to 0.12.23
-  subdir/          — First workspace member (reqwest = "0.12")
-  subdir2/         — Second workspace member (reqwest = "0.12")
-workspace/         — Workspace template, overwritten per scenario by run_tests.sh
-  Cargo.toml       — Workspace root with members: [subdir1, subdir2]
-  subdir1/         — First workspace member
-  subdir2/         — Second workspace member
-single_crate/      — Single crate template, overwritten per scenario by run_tests.sh
-repro_bug.sh       — Standalone reproduction of the #39137 bug
-run_tests.sh       — Test suite (accepts scenario number: 1, 2, or 3)
-run_all_tests.sh   — Host-side orchestrator: builds image, runs all scenarios
-Dockerfile         — Builds a container with pinned Rust 1.90 toolchain
-.dockerignore      — Excludes .git and target/ from Docker context
+docker-compose.yml        Service definitions (Gitea + all test containers)
+run_all_tests.sh          Orchestrator — starts Gitea, runs tests, prints summary
+
+39137/                    Cargo-level unit tests (no Renovate)
+  Dockerfile              FROM rust:1.90-slim
+  test.sh                 Bug repro + scenarios 1-3
+  repro_crate/            Static workspace fixture (reqwest)
+  single_crate/           Template fixture (overwritten per scenario)
+  workspace/              Template workspace fixture
+
+e2e_38778/                Renovate e2e test for issue #38778
+  Dockerfile              Multi-stage: node+renovate, rust runtime
+  test.sh                 Push workspace to Gitea, run Renovate
+  workspace/              reqwest 0.12 workspace (bump strategy)
+
+e2e_39137/                Renovate e2e test for issue #39137
+  Dockerfile              Multi-stage: node+renovate, rust runtime
+  test.sh                 Push 3 fixtures to Gitea, run Renovate
+  fixtures/               3 fixture scenarios
 ```
+
+## Running Individual Tests
+
+The recommended way is `./run_all_tests.sh`, but you can run pieces independently:
+
+```bash
+# Start just Gitea
+docker compose up -d --wait gitea
+
+# Run only the cargo-level tests (no Gitea needed)
+docker compose run --rm cargo-tests
+
+# Run a single e2e test (requires Gitea + GITEA_TOKEN)
+docker compose run --rm e2e-39137-new
+```
+
+To tear everything down:
+
+```bash
+docker compose down
+```
+
+## The Bug
+
+Renovate's `cargoUpdatePrecise` function runs `cargo update --package <dep>@<lockedVersion> --precise <newVersion>` for each dependency. In a workspace with shared dependencies, the first `--precise` call mutates the shared `Cargo.lock`, causing subsequent calls to fail because the `@lockedVersion` spec no longer matches.
+
+## The Fix
+
+The fix adds a guard: when `currentValue !== newValue` (manifest range was bumped), skip `--precise` and let the trailing `--workspace` re-resolve against the new range.

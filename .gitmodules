@@ -1,3 +1,3 @@
-[submodule "renovate"]
-	path = renovate
-	url = https://github.com/just-in-chang/renovate.git
+[submodule "e2e_38778/workspace"]
+	path = e2e_38778/workspace
+	url = https://github.com/tommyjcarpenter/rust-repro-example-38778
