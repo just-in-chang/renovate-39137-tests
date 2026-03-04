@@ -44,7 +44,7 @@ run_renovate() {
     echo -e "${CYAN}━━━ $name ━━━${RESET}"
     echo "Running Renovate..."
 
-    LOG_LEVEL=info RENOVATE_EXPOSE_ALL_ENV=true tsx /opt/renovate/lib/renovate.ts \
+    LOG_LEVEL=info RENOVATE_EXPOSE_ALL_ENV=true renovate \
         --platform=gitea \
         --endpoint="http://${GITEA_HOST}:3000/api/v1/" \
         --token="$GITEA_TOKEN" \
@@ -92,6 +92,18 @@ echo ""
 create_and_push_repo /tests/fixtures/range-bump-single     "${REPO_PREFIX}-range-bump-single"
 create_and_push_repo /tests/fixtures/range-bump-workspace   "${REPO_PREFIX}-range-bump-workspace"
 create_and_push_repo /tests/fixtures/stale-lockver-workspace "${REPO_PREFIX}-stale-lockver-workspace"
+
+# Wait for Gitea to index repo content before running Renovate
+echo "Waiting for Gitea to index repos..."
+for repo in "${REPO_PREFIX}-range-bump-single" "${REPO_PREFIX}-range-bump-workspace" "${REPO_PREFIX}-stale-lockver-workspace"; do
+    for i in $(seq 1 10); do
+        if curl -sf "http://${GITEA_HOST}:3000/api/v1/repos/$GITEA_ADMIN_USER/$repo/contents/Cargo.toml" \
+            -H "Authorization: token $GITEA_TOKEN" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+done
 
 # Run Renovate against each repo
 run_renovate "${REPO_PREFIX}-range-bump-single"       "Range bump (single)"

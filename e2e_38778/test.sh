@@ -54,6 +54,10 @@ cat > renovate.json <<'EOF'
     {
       "matchManagers": ["cargo"],
       "rangeStrategy": "bump"
+    },
+    {
+      "matchPackageNames": ["reqwest"],
+      "allowedVersions": "<0.13"
     }
   ]
 }
@@ -69,8 +73,18 @@ rm -rf "$tmpdir"
 
 logfile="/tmp/e2e-38778.log"
 
+# Wait for Gitea to index the repo content before running Renovate
+echo "Waiting for Gitea to index repo..."
+for i in $(seq 1 10); do
+    if curl -sf "http://${GITEA_HOST}:3000/api/v1/repos/$GITEA_ADMIN_USER/$REPO_NAME/contents/Cargo.toml" \
+        -H "Authorization: token $GITEA_TOKEN" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
 echo "Running Renovate..."
-LOG_LEVEL=info RENOVATE_EXPOSE_ALL_ENV=true tsx /opt/renovate/lib/renovate.ts \
+LOG_LEVEL=info RENOVATE_EXPOSE_ALL_ENV=true renovate \
     --platform=gitea \
     --endpoint="http://${GITEA_HOST}:3000/api/v1/" \
     --token="$GITEA_TOKEN" \

@@ -6,6 +6,13 @@ BOLD='\033[1m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RESET
 TESTS_PASSED=0
 TESTS_FAILED=0
 RESULTS=()
+REBUILD_BASE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --rebuild-base) REBUILD_BASE=true ;;
+    esac
+done
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Helpers
@@ -46,6 +53,28 @@ record_result() {
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
+
+build_base_image() {
+    local image_name="$1" repo_url="$2"
+
+    if [[ "$REBUILD_BASE" == true ]]; then
+        echo -e "  ${YELLOW}--rebuild-base: force rebuilding ${image_name}${RESET}"
+    elif docker image inspect "$image_name" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}${image_name} already exists, skipping build${RESET}"
+        return 0
+    fi
+
+    echo -e "  Building ${image_name} from ${repo_url}..."
+    docker build --no-cache -t "$image_name" --build-arg RENOVATE_REPO="$repo_url" base/
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Setup: Build base images
+# ═══════════════════════════════════════════════════════════════════════════
+
+echo -e "${BOLD}Building base images...${RESET}"
+build_base_image renovate-base-upstream https://github.com/renovatebot/renovate.git
+build_base_image renovate-base-fork    https://github.com/just-in-chang/renovate.git
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Setup: Shared Gitea via Docker Compose

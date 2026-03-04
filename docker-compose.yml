@@ -26,7 +26,7 @@ services:
     build:
       context: e2e_38778/
       args:
-        RENOVATE_REPO: https://github.com/renovatebot/renovate.git
+        BASE_IMAGE: renovate-base-upstream
     depends_on:
       gitea:
         condition: service_healthy
@@ -41,7 +41,7 @@ services:
     build:
       context: e2e_38778/
       args:
-        RENOVATE_REPO: https://github.com/just-in-chang/renovate.git
+        BASE_IMAGE: renovate-base-fork
     depends_on:
       gitea:
         condition: service_healthy
@@ -56,7 +56,7 @@ services:
     build:
       context: e2e_39137/
       args:
-        RENOVATE_REPO: https://github.com/renovatebot/renovate.git
+        BASE_IMAGE: renovate-base-upstream
     depends_on:
       gitea:
         condition: service_healthy
@@ -71,7 +71,7 @@ services:
     build:
       context: e2e_39137/
       args:
-        RENOVATE_REPO: https://github.com/just-in-chang/renovate.git
+        BASE_IMAGE: renovate-base-fork
     depends_on:
       gitea:
         condition: service_healthy
