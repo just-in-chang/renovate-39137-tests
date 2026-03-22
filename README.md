@@ -1,5 +1,8 @@
 # Cargo Update Test Suite for renovatebot/renovate#39137
 
+> [!IMPORTANT]
+> These changes were released in [Renovate 43.60.0](https://github.com/renovatebot/renovate/releases/tag/43.60.0).
+
 Reproducible test suite for `cargo update` behavior that exposed a bug in Renovate's `cargoUpdatePrecise` logic. Uses Docker Compose to orchestrate a shared Gitea instance and run all tests.
 
 ## Quick Start
